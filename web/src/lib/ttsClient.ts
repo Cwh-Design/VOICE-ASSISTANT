@@ -21,9 +21,8 @@ export async function synthesize(text: string): Promise<TtsResult> {
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
 
-  // 估算时长：中文 TTS spd=15 约 12 字/秒，mp3 码率约 16KB/s
-  // 优先用文件大小估算，避免手机端额外创建 Audio 元素
-  const estimatedBySize = blob.size / 16000 // 约 16KB/s
+  // 估算时长：WAV 格式 16kHz/16bit 单声道 ≈ 32KB/s
+  const estimatedBySize = blob.size / 32000
   const estimatedByText = text.length / 12
   const duration = estimatedBySize > 0 ? estimatedBySize : estimatedByText
 

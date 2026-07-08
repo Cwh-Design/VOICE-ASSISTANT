@@ -28,7 +28,8 @@ export default async function handler(req, res) {
     const token = await getBaiduToken()
     const spd = process.env.TTS_SPD || '15'
     const per = process.env.TTS_PER || '4117'
-    const aue = process.env.TTS_AUE || '3'
+    // 改用 WAV 格式（aue=6），所有手机浏览器都支持；MP3 部分机型 code 4 报错
+    const aue = process.env.TTS_AUE || '6'
     const baiduUrl = `wss://aip.baidubce.com/ws/2.0/speech/publiccloudspeech/v1/tts?access_token=${token}&per=${per}`
 
     const baiduWs = new WebSocket(baiduUrl)
@@ -79,7 +80,7 @@ export default async function handler(req, res) {
     }
 
     const audioBuf = Buffer.concat(chunks)
-    res.setHeader('Content-Type', 'audio/mp3')
+    res.setHeader('Content-Type', 'audio/wav')
     res.setHeader('Content-Length', audioBuf.length)
     res.setHeader('Cache-Control', 'no-cache')
     res.send(audioBuf)
