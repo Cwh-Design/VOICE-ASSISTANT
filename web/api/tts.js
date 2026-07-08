@@ -1,5 +1,3 @@
-import WebSocket from 'ws'
-
 // 百度 access_token 缓存（serverless 实例复用）
 let baiduToken = null
 let baiduTokenExpire = 0
@@ -28,61 +26,45 @@ export default async function handler(req, res) {
     const token = await getBaiduToken()
     const spd = process.env.TTS_SPD || '15'
     const per = process.env.TTS_PER || '4117'
-    // 改用 WAV 格式（aue=6），所有手机浏览器都支持；MP3 部分机型 code 4 报错
-    const aue = process.env.TTS_AUE || '6'
-    const baiduUrl = `wss://aip.baidubce.com/ws/2.0/speech/publiccloudspeech/v1/tts?access_token=${token}&per=${per}`
-
-    const baiduWs = new WebSocket(baiduUrl)
-    const chunks = []
-
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        baiduWs.close()
-        reject(new Error('百度 TTS 超时'))
-      }, 15000)
-
-      baiduWs.on('open', () => {
-        baiduWs.send(JSON.stringify({
-          type: 'system.start',
-          payload: { spd: Number(spd), vol: 5, aue: Number(aue) },
-        }))
-        baiduWs.send(JSON.stringify({ type: 'text', payload: { text } }))
-        baiduWs.send(JSON.stringify({ type: 'system.finish' }))
-      })
-
-      baiduWs.on('message', (data, isBinary) => {
-        if (isBinary) {
-          chunks.push(data)
-        } else {
-          try {
-            const msg = JSON.parse(data.toString())
-            if (msg.type === 'system.error') {
-              clearTimeout(timeout)
-              reject(new Error(msg.message || '百度 TTS 错误'))
-            }
-          } catch {}
-        }
-      })
-
-      baiduWs.on('close', () => {
-        clearTimeout(timeout)
-        resolve()
-      })
-
-      baiduWs.on('error', (e) => {
-        clearTimeout(timeout)
-        reject(new Error(String(e)))
-      })
+    // 改用百度 HTTP TTS API（tsn.baidu.com/text2audio），直接返回音频二进制
+    // aue=3: mp3, aue=4: pcm-16k, aue=5: pcm-8k, aue=6: wav
+    const aue = process.env.TTS_AUE || '3'
+    const params = new URLSearchParams({
+      tex: text,
+      tok: token,
+      cuid: 'voice-assistant',
+      ctp: '1',
+      lan: 'zh',
+      spd,
+      pit: '5',
+      vol: '5',
+      per,
+      aue,
     })
 
-    if (chunks.length === 0) {
-      return res.status(502).json({ error: '百度 TTS 未返回音频数据' })
+    const r = await fetch(`https://tsn.baidu.com/text2audio?${params}`)
+
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '')
+      return res.status(502).json({ error: '百度 TTS 调用失败', detail: errText.slice(0, 200) })
     }
 
-    const audioBuf = Buffer.concat(chunks)
-    res.setHeader('Content-Type', 'audio/wav')
+    // 百度失败时会返回 JSON 格式错误信息，要先判断 Content-Type
+    const contentType = r.headers.get('content-type') || ''
+    if (!contentType.startsWith('audio/')) {
+      const errBody = await r.text()
+      return res.status(502).json({ error: '百度 TTS 返回非音频数据', detail: errBody.slice(0, 200) })
+    }
+
+    const audioBuf = Buffer.from(await r.arrayBuffer())
+    if (audioBuf.length < 100) {
+      return res.status(502).json({ error: '百度 TTS 返回空音频' })
+    }
+
+    res.setHeader('Content-Type', contentType)
     res.setHeader('Content-Length', audioBuf.length)
     res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Accept-Ranges', 'bytes')
     res.send(audioBuf)
   } catch (e) {
     console.error('tts error:', e)
