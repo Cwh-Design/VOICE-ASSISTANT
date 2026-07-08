@@ -5,16 +5,6 @@ export interface TtsResult {
   duration: number
 }
 
-function getAudioDuration(url: string): Promise<number> {
-  return new Promise((resolve) => {
-    const a = new Audio()
-    a.preload = 'metadata'
-    a.onloadedmetadata = () => resolve(isFinite(a.duration) && a.duration > 0 ? a.duration : 0)
-    a.onerror = () => resolve(0)
-    a.src = url
-  })
-}
-
 /** 把文本合成成语音，返回可播放的音频 URL 和时长（秒） */
 export async function synthesize(text: string): Promise<TtsResult> {
   const res = await fetch('/api/tts', {
@@ -30,6 +20,12 @@ export async function synthesize(text: string): Promise<TtsResult> {
 
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
-  const duration = await getAudioDuration(url)
+
+  // 估算时长：中文 TTS spd=15 约 12 字/秒，mp3 码率约 16KB/s
+  // 优先用文件大小估算，避免手机端额外创建 Audio 元素
+  const estimatedBySize = blob.size / 16000 // 约 16KB/s
+  const estimatedByText = text.length / 12
+  const duration = estimatedBySize > 0 ? estimatedBySize : estimatedByText
+
   return { audioUrl: url, duration }
 }

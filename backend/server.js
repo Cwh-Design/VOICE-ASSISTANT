@@ -8,7 +8,7 @@ const {
   ARK_API_KEY,
   ARK_MODEL = 'deepseek-v4-pro',
   TTS_SPD = '15',
-  TTS_PER = '4116',
+  TTS_PER = '4117',
   TTS_AUE = '3',
   PORT = '8787',
 } = process.env
@@ -70,6 +70,79 @@ async function getBaiduToken() {
   baiduTokenExpire = now + (data.expires_in ?? 2592000) * 1000
   return baiduToken
 }
+
+// ============ 百度 TTS HTTP POST（手机兼容）============
+app.post('/api/tts', async (req, res) => {
+  const text = (req.body?.text ?? '').toString().trim()
+  if (!text) return res.status(400).json({ error: 'text 不能为空' })
+
+  try {
+    const token = await getBaiduToken()
+    const per = req.query?.per || TTS_PER
+    const baiduUrl = `wss://aip.baidubce.com/ws/2.0/speech/publiccloudspeech/v1/tts?access_token=${token}&per=${per}`
+
+    const baiduWs = new WebSocket(baiduUrl)
+    const chunks = []
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        baiduWs.close()
+        reject(new Error('百度 TTS 超时'))
+      }, 15000)
+
+      baiduWs.on('open', () => {
+        baiduWs.send(JSON.stringify({
+          type: 'system.start',
+          payload: { spd: Number(TTS_SPD), vol: 5, aue: Number(TTS_AUE) },
+        }))
+        // 发送文本
+        baiduWs.send(JSON.stringify({ type: 'text', payload: { text } }))
+        // 发送结束标记
+        baiduWs.send(JSON.stringify({ type: 'system.finish' }))
+      })
+
+      baiduWs.on('message', (data, isBinary) => {
+        if (isBinary) {
+          chunks.push(data)
+        } else {
+          // JSON 帧，检查是否有错误
+          try {
+            const msg = JSON.parse(data.toString())
+            if (msg.type === 'system.error') {
+              clearTimeout(timeout)
+              reject(new Error(msg.message || '百度 TTS 错误'))
+            }
+          } catch {}
+        }
+      })
+
+      baiduWs.on('close', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+
+      baiduWs.on('error', (e) => {
+        clearTimeout(timeout)
+        reject(new Error(String(e)))
+      })
+    })
+
+    if (chunks.length === 0) {
+      return res.status(502).json({ error: '百度 TTS 未返回音频数据' })
+    }
+
+    const audioBuf = Buffer.concat(chunks)
+    res.set({
+      'Content-Type': 'audio/mp3',
+      'Content-Length': audioBuf.length,
+      'Cache-Control': 'no-cache',
+    })
+    res.send(audioBuf)
+  } catch (e) {
+    console.error('tts error:', e)
+    res.status(500).json({ error: 'TTS 合成失败', detail: String(e) })
+  }
+})
 
 // ============ 百度流式 TTS WebSocket 透传 ============
 const server = app.listen(Number(PORT), () => {
