@@ -1,23 +1,21 @@
-// Vercel Serverless Function: 百度 TTS 合成代理（REST API，无需 WebSocket）
+import WebSocket from 'ws'
 
-let cachedToken = null
-let tokenExpireAt = 0
+// 百度 access_token 缓存（serverless 实例复用）
+let baiduToken = null
+let baiduTokenExpire = 0
 
 async function getBaiduToken() {
   const now = Date.now()
-  if (cachedToken && now < tokenExpireAt - 60_000) return cachedToken
+  if (baiduToken && now < baiduTokenExpire - 60_000) return baiduToken
 
-  const BAIDU_API_KEY = process.env.BAIDU_API_KEY
-  const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY
-
-  const url = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`
+  const url = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${process.env.BAIDU_API_KEY}&client_secret=${process.env.BAIDU_SECRET_KEY}`
   const r = await fetch(url)
   const data = await r.json()
   if (!data.access_token) throw new Error('获取百度 access_token 失败: ' + JSON.stringify(data))
 
-  cachedToken = data.access_token
-  tokenExpireAt = now + (data.expires_in ?? 2592000) * 1000
-  return cachedToken
+  baiduToken = data.access_token
+  baiduTokenExpire = now + (data.expires_in ?? 2592000) * 1000
+  return baiduToken
 }
 
 export default async function handler(req, res) {
@@ -26,43 +24,67 @@ export default async function handler(req, res) {
   const text = (req.body?.text ?? '').toString().trim()
   if (!text) return res.status(400).json({ error: 'text 不能为空' })
 
-  const TTS_SPD = process.env.TTS_SPD || '15'
-  const TTS_PER = process.env.TTS_PER || '4106'
-  const TTS_AUE = process.env.TTS_AUE || '3'
-
   try {
     const token = await getBaiduToken()
-    const params = new URLSearchParams({
-      tex: text,
-      tok: token,
-      cuid: 'voice-assistant-demo',
-      ctp: '1',
-      lan: 'zh',
-      spd: TTS_SPD,
-      per: TTS_PER,
-      aue: TTS_AUE,
+    const spd = process.env.TTS_SPD || '15'
+    const per = process.env.TTS_PER || '4117'
+    const aue = process.env.TTS_AUE || '3'
+    const baiduUrl = `wss://aip.baidubce.com/ws/2.0/speech/publiccloudspeech/v1/tts?access_token=${token}&per=${per}`
+
+    const baiduWs = new WebSocket(baiduUrl)
+    const chunks = []
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        baiduWs.close()
+        reject(new Error('百度 TTS 超时'))
+      }, 15000)
+
+      baiduWs.on('open', () => {
+        baiduWs.send(JSON.stringify({
+          type: 'system.start',
+          payload: { spd: Number(spd), vol: 5, aue: Number(aue) },
+        }))
+        baiduWs.send(JSON.stringify({ type: 'text', payload: { text } }))
+        baiduWs.send(JSON.stringify({ type: 'system.finish' }))
+      })
+
+      baiduWs.on('message', (data, isBinary) => {
+        if (isBinary) {
+          chunks.push(data)
+        } else {
+          try {
+            const msg = JSON.parse(data.toString())
+            if (msg.type === 'system.error') {
+              clearTimeout(timeout)
+              reject(new Error(msg.message || '百度 TTS 错误'))
+            }
+          } catch {}
+        }
+      })
+
+      baiduWs.on('close', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+
+      baiduWs.on('error', (e) => {
+        clearTimeout(timeout)
+        reject(new Error(String(e)))
+      })
     })
 
-    const r = await fetch('https://tsn.baidu.com/text2audio', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString(),
-    })
-
-    const contentType = r.headers.get('content-type') || ''
-
-    if (contentType.includes('application/json')) {
-      const err = await r.json()
-      return res.status(502).json({ error: '百度 TTS 合成失败', detail: err })
+    if (chunks.length === 0) {
+      return res.status(502).json({ error: '百度 TTS 未返回音频数据' })
     }
 
-    // 成功：返回音频
-    const audioBuffer = await r.arrayBuffer()
-    res.setHeader('Content-Type', 'audio/mpeg')
-    res.setHeader('Content-Length', audioBuffer.byteLength)
-    res.send(Buffer.from(audioBuffer))
+    const audioBuf = Buffer.concat(chunks)
+    res.setHeader('Content-Type', 'audio/mp3')
+    res.setHeader('Content-Length', audioBuf.length)
+    res.setHeader('Cache-Control', 'no-cache')
+    res.send(audioBuf)
   } catch (e) {
     console.error('tts error:', e)
-    res.status(500).json({ error: 'TTS 合成异常', detail: String(e) })
+    res.status(500).json({ error: 'TTS 合成失败', detail: String(e) })
   }
 }

@@ -1,3 +1,11 @@
 {
-  "framework": "vite"
+  "framework": "vite",
+  "functions": {
+    "api/tts.js": {
+      "maxDuration": 30
+    },
+    "api/chat.js": {
+      "maxDuration": 30
+    }
+  }
 }

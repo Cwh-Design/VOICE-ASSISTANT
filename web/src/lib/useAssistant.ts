@@ -1,7 +1,15 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { synthesize } from './ttsClient'
 
 export type AssistantState = 'idle' | 'thinking' | 'answering'
+
+// MediaError code 对照表
+const MEDIA_ERR: Record<number, string> = {
+  1: '用户中止',
+  2: '网络错误',
+  3: '解码错误',
+  4: '格式不支持',
+}
 
 /**
  * 状态机：idle -> thinking -> answering -> idle
@@ -16,6 +24,8 @@ export function useAssistant() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const rafRef = useRef<number>(0)
   const abortRef = useRef<AbortController | null>(null)
+  // 记录用户是否已经交互过（用于解锁音频播放）
+  const unlockedRef = useRef(false)
 
   const cleanup = () => {
     cancelAnimationFrame(rafRef.current)
@@ -36,8 +46,32 @@ export function useAssistant() {
     setRevealed(0)
   }
 
+  // 解锁音频：iOS 必须在用户手势中创建一个真实 <audio> 元素并调用 play()，
+  // 才能解除后续所有 audio 元素的自动播放限制。Web Audio API 解锁对 HTML5 Audio 无效。
+  const unlock = useCallback(() => {
+    if (unlockedRef.current) return
+    // 1x1 采样点的静音 WAV（base64 编码），44 字节
+    const SILENT_WAV =
+      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA='
+    const a = new Audio(SILENT_WAV)
+    a.setAttribute('playsinline', 'true')
+    a.setAttribute('webkit-playsinline', 'true')
+    a.volume = 0
+    const p = a.play()
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        a.pause()
+        unlockedRef.current = true
+      }).catch(() => {
+        // 播放失败也标记为已尝试过，避免重复触发
+        unlockedRef.current = true
+      })
+    }
+  }, [])
+
   const ask = async (question: string) => {
     if (state !== 'idle') return
+    unlock() // 在用户点击的同步调用链里解锁音频
     setError(null)
     setAnswer('')
     setRevealed(0)
@@ -69,7 +103,11 @@ export function useAssistant() {
       // 兜底时长：取不到就用估算（spd=15 约 12 字/秒）
       const fallbackDur = tts.duration > 0 ? tts.duration : total / 12
 
-      const audio = new Audio(tts.audioUrl)
+      const audio = new Audio()
+      audio.setAttribute('playsinline', 'true')
+      audio.setAttribute('webkit-playsinline', 'true')
+      audio.preload = 'auto'
+      audio.src = tts.audioUrl
       audioRef.current = audio
 
       const lastRevealed = { v: 0 }
@@ -97,13 +135,17 @@ export function useAssistant() {
         }, 5000)
       }
       audio.onerror = () => {
-        setError('音频播放失败')
+        // 输出 MediaError 详细信息（code 1=中止 2=网络 3=解码 4=不支持）
+        const err = audio.error
+        const detail = err ? ` (code ${err.code}: ${err.message || MEDIA_ERR[err.code] || '未知'})` : ''
+        console.error('audio error code:', err?.code, 'src:', tts.audioUrl.slice(0, 60))
+        setError('音频播放失败' + detail)
         cleanup()
         setState('idle')
       }
 
       await audio.play().catch((e) => {
-        setError('播放被拦截：' + String(e))
+        setError('播放被拦截：' + (e?.name || String(e)))
         cleanup()
         setState('idle')
       })
