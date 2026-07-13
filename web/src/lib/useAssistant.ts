@@ -13,7 +13,7 @@ const MEDIA_ERR: Record<number, string> = {
 
 /**
  * 状态机：idle -> thinking -> answering -> idle
- * - thinking：调火山方舟拿回答
+ * - thinking：调 DeepSeek 拿回答
  * - answering：合成 TTS 并播放，打字机按音频时长整体同步出字
  */
 export function useAssistant() {
@@ -78,7 +78,7 @@ export function useAssistant() {
     setState('thinking')
 
     try {
-      // 1. 火山方舟对话
+      // 1. DeepSeek 对话
       abortRef.current = new AbortController()
       const res = await fetch('/api/chat', {
         method: 'POST',

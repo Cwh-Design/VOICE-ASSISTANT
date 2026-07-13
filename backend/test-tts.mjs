@@ -4,7 +4,7 @@ import WebSocket from 'ws'
 const per = process.argv[2] || '4106'
 const question = '讲个简短的笑话'
 
-// 1. 火山方舟对话
+// 1. DeepSeek 对话
 const r = await fetch('http://localhost:8787/api/chat', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },

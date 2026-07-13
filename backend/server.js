@@ -5,8 +5,8 @@ import { WebSocketServer, WebSocket } from 'ws'
 const {
   BAIDU_API_KEY,
   BAIDU_SECRET_KEY,
-  ARK_API_KEY,
-  ARK_MODEL = 'deepseek-v4-pro',
+  DEEPSEEK_API_KEY,
+  DEEPSEEK_MODEL = 'deepseek-chat',
   TTS_SPD = '15',
   TTS_PER = '4117',
   TTS_AUE = '3',
@@ -25,21 +25,21 @@ app.use((req, res, next) => {
   next()
 })
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, model: ARK_MODEL, spd: TTS_SPD, per: TTS_PER }))
+app.get('/api/health', (_req, res) => res.json({ ok: true, model: DEEPSEEK_MODEL, spd: TTS_SPD, per: TTS_PER }))
 
-// ============ 火山方舟对话（非流式，v1 先拿整段回答）============
+// ============ DeepSeek 对话（非流式，v1 先拿整段回答）============
 app.post('/api/chat', async (req, res) => {
   const question = (req.body?.question ?? '').toString().trim()
   if (!question) return res.status(400).json({ error: 'question 不能为空' })
   try {
-    const r = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+    const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${ARK_API_KEY}`,
+        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify({
-        model: ARK_MODEL,
+        model: DEEPSEEK_MODEL,
         messages: [
           { role: 'system', content: '你是一个简洁友好的中文语音助手，回答口语化、不要太长，一般两三句以内。' },
           { role: 'user', content: question },
