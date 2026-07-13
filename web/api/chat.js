@@ -5,14 +5,14 @@ export default async function handler(req, res) {
   if (!question) return res.status(400).json({ error: 'question 不能为空' })
 
   try {
-    const r = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+    const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.ARK_API_KEY}`,
+        Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify({
-        model: process.env.ARK_MODEL || 'deepseek-v4-pro',
+        model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
         messages: [
           { role: 'system', content: '你是一个简洁友好的中文语音助手，回答口语化、不要太长，一般两三句以内。' },
           { role: 'user', content: question },
